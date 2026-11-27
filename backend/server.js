@@ -1,9 +1,6 @@
-const dns = require("dns");
-dns.setServers(["8.8.8.8", "8.8.4.4"]);
-
 const express = require("express");
 const cors = require("cors");
-const mongoose = require("mongoose");
+const { Pool } = require("pg");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
@@ -14,59 +11,65 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-const hotelSchema = new mongoose.Schema(
-  {
-    title: { type: String, required: true },
-    description: { type: String, required: true },
-    price: { type: Number, required: true },
-    latitude: { type: Number, required: true },
-    longitude: { type: Number, required: true },
-    image: { type: String, required: true },
-  },
-  {
-    toJSON: {
-      virtuals: true,
-      transform: (doc, ret) => {
-        ret.id = ret._id.toString();
-        delete ret.__v;
-        return ret;
-      },
-    },
-  }
-);
+const connectionString =
+  process.env.DATABASE_URL ||
+  process.env.MONGO_URI ||
+  process.env.POSTGRES_URL;
 
-const Hotel = mongoose.model("Hotel", hotelSchema);
+const pool = new Pool({
+  connectionString,
+  ssl:
+    connectionString && !connectionString.includes("localhost")
+      ? { rejectUnauthorized: false }
+      : false,
+});
 
-const connectDB = async () => {
+const createTable = async () => {
+  const query = `
+    CREATE TABLE IF NOT EXISTS hotels (
+      id SERIAL PRIMARY KEY,
+      title VARCHAR(255) NOT NULL,
+      description TEXT NOT NULL,
+      price NUMERIC NOT NULL,
+      latitude NUMERIC NOT NULL,
+      longitude NUMERIC NOT NULL,
+      image TEXT NOT NULL
+    );
+  `;
   try {
-    const uri = process.env.MONGO_URI || process.env.MONGODB_URI;
-    if (!uri || uri.includes("your_mongodb_connection_string")) {
-      console.log("Please provide your MongoDB connection string in backend/.env");
-      return;
-    }
-    await mongoose.connect(uri);
-    console.log("MongoDB connected successfully");
+    await pool.query(query);
+    console.log("PostgreSQL connected and hotels table ready");
   } catch (error) {
-    console.error("MongoDB connection error:", error.message);
+    console.error("Database initialization error:", error.message);
   }
 };
 
+app.get("/", (req, res) => {
+  res.send("Namla API is running");
+});
+
 app.get("/api/hotels", async (req, res) => {
   try {
-    const hotels = await Hotel.find().sort({ _id: -1 });
-    res.json(hotels);
+    const result = await pool.query(
+      "SELECT id, title, description, price::float, latitude::float, longitude::float, image FROM hotels ORDER BY id DESC;"
+    );
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 app.get("/api/hotels/:id", async (req, res) => {
+  const { id } = req.params;
   try {
-    const hotel = await Hotel.findById(req.params.id);
-    if (!hotel) {
+    const result = await pool.query(
+      "SELECT id, title, description, price::float, latitude::float, longitude::float, image FROM hotels WHERE id = $1;",
+      [id]
+    );
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: "Hotel not found" });
     }
-    res.json(hotel);
+    res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -74,65 +77,84 @@ app.get("/api/hotels/:id", async (req, res) => {
 
 app.post("/api/hotels", async (req, res) => {
   const { title, description, price, latitude, longitude, image } = req.body;
-  if (!title || !description || !price || latitude === undefined || longitude === undefined) {
+  if (
+    !title ||
+    !description ||
+    price === undefined ||
+    latitude === undefined ||
+    longitude === undefined
+  ) {
     return res.status(400).json({ error: "All fields are required" });
   }
   try {
-    const hotel = new Hotel({
-      title,
-      description,
-      price,
-      latitude,
-      longitude,
-      image: image || "",
-    });
-    await hotel.save();
-    res.status(201).json(hotel);
+    const result = await pool.query(
+      "INSERT INTO hotels (title, description, price, latitude, longitude, image) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, title, description, price::float, latitude::float, longitude::float, image;",
+      [
+        title.trim(),
+        description.trim(),
+        Number(price),
+        Number(latitude),
+        Number(longitude),
+        image || "",
+      ]
+    );
+    res.status(201).json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 app.put("/api/hotels/:id", async (req, res) => {
+  const { id } = req.params;
   const { title, description, price, latitude, longitude, image } = req.body;
-  if (!title || !description || !price || latitude === undefined || longitude === undefined) {
+  if (
+    !title ||
+    !description ||
+    price === undefined ||
+    latitude === undefined ||
+    longitude === undefined
+  ) {
     return res.status(400).json({ error: "All fields are required" });
   }
   try {
-    const hotel = await Hotel.findByIdAndUpdate(
-      req.params.id,
-      {
-        title,
-        description,
-        price,
-        latitude,
-        longitude,
-        image: image || "",
-      },
-      { new: true }
+    const result = await pool.query(
+      "UPDATE hotels SET title = $1, description = $2, price = $3, latitude = $4, longitude = $5, image = $6 WHERE id = $7 RETURNING id, title, description, price::float, latitude::float, longitude::float, image;",
+      [
+        title.trim(),
+        description.trim(),
+        Number(price),
+        Number(latitude),
+        Number(longitude),
+        image || "",
+        id,
+      ]
     );
-    if (!hotel) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: "Hotel not found" });
     }
-    res.json(hotel);
+    res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 app.delete("/api/hotels/:id", async (req, res) => {
+  const { id } = req.params;
   try {
-    const hotel = await Hotel.findByIdAndDelete(req.params.id);
-    if (!hotel) {
+    const result = await pool.query(
+      "DELETE FROM hotels WHERE id = $1 RETURNING id, title;",
+      [id]
+    );
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: "Hotel not found" });
     }
-    res.json({ message: "Hotel deleted successfully", hotel });
+    res.json({ message: "Hotel deleted successfully", hotel: result.rows[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 app.listen(PORT, async () => {
-  await connectDB();
+  await createTable();
   console.log(`Server is running on port ${PORT}`);
 });
