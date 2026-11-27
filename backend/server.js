@@ -16,15 +16,24 @@ const connectionString =
   process.env.MONGO_URI ||
   process.env.POSTGRES_URL;
 
-const pool = new Pool({
-  connectionString,
-  ssl:
-    connectionString && !connectionString.includes("localhost")
-      ? { rejectUnauthorized: false }
-      : false,
-});
+const pool = new Pool(
+  connectionString
+    ? {
+        connectionString,
+        ssl: !connectionString.includes("localhost")
+          ? { rejectUnauthorized: false }
+          : false,
+      }
+    : {}
+);
 
 const createTable = async () => {
+  if (!connectionString) {
+    console.error(
+      "Database connection string (DATABASE_URL) is missing in environment variables"
+    );
+    return;
+  }
   const query = `
     CREATE TABLE IF NOT EXISTS hotels (
       id SERIAL PRIMARY KEY,
@@ -40,7 +49,10 @@ const createTable = async () => {
     await pool.query(query);
     console.log("PostgreSQL connected and hotels table ready");
   } catch (error) {
-    console.error("Database initialization error:", error.message);
+    console.error(
+      "Database initialization error:",
+      error.message || String(error)
+    );
   }
 };
 
@@ -49,17 +61,29 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/hotels", async (req, res) => {
+  if (!connectionString) {
+    return res.status(500).json({
+      error:
+        "Database connection string (DATABASE_URL) is missing in environment variables.",
+    });
+  }
   try {
     const result = await pool.query(
       "SELECT id, title, description, price::float, latitude::float, longitude::float, image FROM hotels ORDER BY id DESC;"
     );
     res.json(result.rows);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || String(error) });
   }
 });
 
 app.get("/api/hotels/:id", async (req, res) => {
+  if (!connectionString) {
+    return res.status(500).json({
+      error:
+        "Database connection string (DATABASE_URL) is missing in environment variables.",
+    });
+  }
   const { id } = req.params;
   try {
     const result = await pool.query(
@@ -71,11 +95,17 @@ app.get("/api/hotels/:id", async (req, res) => {
     }
     res.json(result.rows[0]);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || String(error) });
   }
 });
 
 app.post("/api/hotels", async (req, res) => {
+  if (!connectionString) {
+    return res.status(500).json({
+      error:
+        "Database connection string (DATABASE_URL) is missing in environment variables.",
+    });
+  }
   const { title, description, price, latitude, longitude, image } = req.body;
   if (
     !title ||
@@ -100,11 +130,17 @@ app.post("/api/hotels", async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || String(error) });
   }
 });
 
 app.put("/api/hotels/:id", async (req, res) => {
+  if (!connectionString) {
+    return res.status(500).json({
+      error:
+        "Database connection string (DATABASE_URL) is missing in environment variables.",
+    });
+  }
   const { id } = req.params;
   const { title, description, price, latitude, longitude, image } = req.body;
   if (
@@ -134,11 +170,17 @@ app.put("/api/hotels/:id", async (req, res) => {
     }
     res.json(result.rows[0]);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || String(error) });
   }
 });
 
 app.delete("/api/hotels/:id", async (req, res) => {
+  if (!connectionString) {
+    return res.status(500).json({
+      error:
+        "Database connection string (DATABASE_URL) is missing in environment variables.",
+    });
+  }
   const { id } = req.params;
   try {
     const result = await pool.query(
@@ -150,7 +192,7 @@ app.delete("/api/hotels/:id", async (req, res) => {
     }
     res.json({ message: "Hotel deleted successfully", hotel: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || String(error) });
   }
 });
 
